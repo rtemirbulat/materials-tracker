@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Учёт материалов</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2433; --muted:#6b7385; --line:#e3e6ec; --accent:#2f6fed; --ok:#1f9d55; --bad:#d63a3a; --badbg:#fdecec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171d; --card:#1d222b; --text:#e8ebf2; --muted:#8f98ab; --line:#2c3340; --accent:#6a9bff; --ok:#46c27d; --bad:#ff6b6b; --badbg:#3a2226; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+  .layout { display:grid; grid-template-columns:260px 1fr; min-height:100vh; }
+  aside { background:var(--card); border-right:1px solid var(--line); padding:16px; }
+  main { padding:20px; max-width:1000px; width:100%; }
+  h1 { font-size:17px; margin:0 0 12px; }
+  h2 { font-size:20px; margin:0; }
+  .obj { display:block; width:100%; text-align:left; padding:10px 12px; margin-bottom:6px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; cursor:pointer; }
+  .obj.active { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  .obj small { display:block; color:var(--muted); }
+  button, input, select { font:inherit; color:inherit; }
+  button { cursor:pointer; }
+  .btn { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn.danger { color:var(--bad); }
+  .btn.small { padding:4px 8px; font-size:13px; }
+  input, select { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); width:100%; }
+  input.invalid { border-color:var(--bad); }
+  .head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line); }
+  .tab { padding:8px 14px; border:0; background:none; border-bottom:2px solid transparent; color:var(--muted); }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .stat span { display:block; color:var(--muted); font-size:13px; }
+  .stat b { font-size:20px; }
+  .bar { height:10px; background:var(--line); border-radius:6px; overflow:hidden; margin-top:6px; }
+  .bar i { display:block; height:100%; background:var(--ok); }
+  .bar i.over { background:var(--bad); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:8px 6px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; white-space:normal; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  tr.over td { background:var(--badbg); }
+  .bad { color:var(--bad); } .good { color:var(--ok); }
+  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 5px; margin-left:4px; }
+  .form { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; align-items:end; }
+  .form label { font-size:13px; color:var(--muted); display:block; }
+  .err { color:var(--bad); font-size:13px; margin-top:8px; min-height:1em; }
+  .empty { color:var(--muted); text-align:center; padding:40px 0; }
+  .warn { background:var(--badbg); color:var(--bad); padding:10px 14px; border-radius:8px; margin-bottom:16px; }
+  .scroll { overflow-x:auto; }
+  @media (max-width:760px) { .layout { grid-template-columns:1fr; } aside { border-right:0; border-bottom:1px solid var(--line); } main { padding:16px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <h1>Объекты</h1>
+    <div id="objList"></div>
+    <button class="btn primary" id="addObj" style="width:100%;margin-top:8px">+ Новый объект</button>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <button class="btn" id="exportJson" style="width:100%;margin-bottom:6px">Резервная копия (JSON)</button>
+    <button class="btn" id="importJson" style="width:100%">Загрузить копию</button>
+    <input type="file" id="importFile" accept=".json" hidden>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<script src="calc.js"></script>
+<script>
+(function () {
+  const KEY = 'materials-tracker-v1';
+  const CUR = '₸';
+  const $ = (id) => document.getElementById(id);
+  const uid = () => Math.random().toString(36).slice(2, 10);
+  const fmt = (n) => (n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' ' + CUR;
+  const num = (n) => (n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  let storageOk = true;
+  let state = { objects: [], currentId: null };
+  let tab = 'summary';
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) state = JSON.parse(raw);
+    } catch (e) { storageOk = false; }
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); }
+    catch (e) { storageOk = false; }
+  }
+  const current = () => state.objects.find((o) => o.id === state.currentId);
+
+  function download(name, text, type) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function readNum(input, opts) {
+    const v = input.value.trim() === '' ? NaN : Number(input.value.replace(',', '.'));
+    const err = Calc.validateNumber(v, opts);
+    input.classList.toggle('invalid', !!err);
+    return err ? { err } : { v };
+  }
+
+  function renderSide() {
+    $('objList').innerHTML = state.objects.map((o) => {
+      const s = Calc.summarize(o);
+      return `<button class="obj ${o.id === state.currentId ? 'active' : ''}" data-id="${o.id}">${esc(o.name)}<small>${fmt(s.factTotal)} из ${fmt(o.budget)}</small></button>`;
+    }).join('') || '<div class="empty" style="padding:12px 0">Пока нет объектов</div>';
+  }
+
+  function render() {
+    renderSide();
+    const o = current();
+    const warn = storageOk ? '' : '<div class="warn">Браузер не даёт сохранять данные. Всё пропадёт при закрытии вкладки — делайте резервную копию (JSON).</div>';
+    if (!o) { $('main').innerHTML = warn + '<div class="empty">Создайте первый объект слева, чтобы начать.</div>'; return; }
+    const tabs = [['summary', 'Сводка'], ['estimate', 'Смета (план)'], ['expenses', 'Расход (факт)']];
+    $('main').innerHTML = warn + `
+      <div class="head">
+        <h2>${esc(o.name)}</h2>
+        <div>
+          <button class="btn small" id="editObj">Изменить</button>
+          <button class="btn small danger" id="delObj">Удалить объект</button>
+        </div>
+      </div>
+      <div class="tabs">${tabs.map(([k, t]) => `<button class="tab ${tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>
+      <div id="tabBody"></div>`;
+    ({ summary: renderSummary, estimate: renderEstimate, expenses: renderExpenses }[tab])(o);
+  }
+
+  function renderSummary(o) {
+    const s = Calc.summarize(o);
+    const pct = s.budgetPct === null ? 0 : Math.min(s.budgetPct, 100);
+    $('tabBody').innerHTML = `
+      <div class="stats">
+        <div class="stat"><span>Бюджет</span><b>${fmt(s.budget)}</b></div>
+        <div class="stat"><span>План по смете</span><b>${fmt(s.planTotal)}</b></div>
+        <div class="stat"><span>Потрачено</span><b>${fmt(s.factTotal)}</b></div>
+        <div class="stat"><span>Остаток бюджета</span><b class="${s.overBudget ? 'bad' : 'good'}">${fmt(s.budgetLeft)}</b></div>
+      </div>
+      <div class="card">
+        Использовано бюджета: <b class="${s.overBudget ? 'bad' : ''}">${s.budgetPct === null ? '—' : s.budgetPct + '%'}</b>
+        ${s.overBudget ? '<b class="bad"> — перерасход!</b>' : ''}
+        <div class="bar"><i class="${s.overBudget ? 'over' : ''}" style="width:${pct}%"></i></div>
+      </div>
+      <div class="card scroll">
+        ${s.rows.length ? `<table>
+          <tr><th>Материал</th><th>План, кол-во</th><th>Факт, кол-во</th><th>План</th><th>Факт</th><th>Остаток</th><th>%</th></tr>
+          ${s.rows.map((r) => `<tr class="${r.over ? 'over' : ''}">
+            <td>${esc(r.name)}${r.unplanned ? '<span class="tag">вне сметы</span>' : ''} <small style="color:var(--muted)">${esc(r.unit)}</small></td>
+            <td>${num(r.planQty)}</td><td>${num(r.factQty)}</td>
+            <td>${fmt(r.planSum)}</td><td>${fmt(r.factSum)}</td>
+            <td class="${r.diff < 0 ? 'bad' : ''}">${fmt(r.diff)}</td>
+            <td>${r.pct === null ? '—' : r.pct + '%'}</td></tr>`).join('')}
+          <tr><td><b>Итого</b></td><td></td><td></td><td><b>${fmt(s.planTotal)}</b></td><td><b>${fmt(s.factTotal)}</b></td><td><b class="${s.diff < 0 ? 'bad' : ''}">${fmt(s.diff)}</b></td><td></td></tr>
+        </table>` : '<div class="empty">Добавьте материалы в смету и записывайте расход.</div>'}
+      </div>
+      <button class="btn" id="exportCsv">Скачать CSV для Excel</button>`;
+  }
+
+  function renderEstimate(o) {
+    $('tabBody').innerHTML = `
+      <div class="card">
+        <div class="form">
+          <div><label>Материал</label><input id="mName" placeholder="Цемент М400"></div>
+          <div><label>Ед. изм.</label><input id="mUnit" placeholder="мешок"></div>
+          <div><label>Кол-во (план)</label><input id="mQty" inputmode="decimal"></div>
+          <div><label>Цена за ед.</label><input id="mPrice" inputmode="decimal"></div>
+          <div><button class="btn primary" id="addMat" style="width:100%">Добавить</button></div>
+        </div>
+        <div class="err" id="mErr"></div>
+      </div>
+      <div class="card scroll">
+        ${o.materials.length ? `<table>
+          <tr><th>Материал</th><th>Ед.</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th></th></tr>
+          ${o.materials.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.unit)}</td><td>${num(m.qty)}</td><td>${fmt(m.price)}</td><td>${fmt(Calc.round2(m.qty * m.price))}</td>
+            <td><button class="btn small danger" data-delmat="${m.id}">✕</button></td></tr>`).join('')}
+        </table>` : '<div class="empty">Смета пуста. Добавьте плановые материалы.</div>'}
+      </div>`;
+  }
+
+  function renderExpenses(o) {
+    const today = new Date().toISOString().slice(0, 10);
+    const sorted = [...o.expenses].sort((a, b) => b.date.localeCompare(a.date));
+    $('tabBody').innerHTML = `
+      <div class="card">
+        <div class="form">
+          <div><label>Дата</label><input type="date" id="eDate" value="${today}"></div>
+          <div><label>Материал</label>
+            <select id="eMat">
+              ${o.materials.map((m) => `<option value="${m.id}">${esc(m.name)} (${esc(m.unit)})</option>`).join('')}
+              <option value="">— вне сметы —</option>
+            </select></div>
+          <div id="eFree" hidden><label>Название / ед.</label><div style="display:flex;gap:6px"><input id="eName" placeholder="Краска"><input id="eUnit" placeholder="л" style="width:70px"></div></div>
+          <div><label>Количество</label><input id="eQty" inputmode="decimal"></div>
+          <div><label>Цена за ед.</label><input id="ePrice" inputmode="decimal"></div>
+          <div><button class="btn primary" id="addExp" style="width:100%">Записать</button></div>
+        </div>
+        <div class="err" id="eErr"></div>
+      </div>
+      <div class="card scroll">
+        ${sorted.length ? `<table>
+          <tr><th>Дата</th><th>Материал</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th></th></tr>
+          ${sorted.map((e) => `<tr><td>${esc(e.date)}</td><td>${esc(e.name)} <small style="color:var(--muted)">${esc(e.unit)}</small></td><td>${num(e.qty)}</td><td>${fmt(e.price)}</td><td>${fmt(Calc.round2(e.qty * e.price))}</td>
+            <td><button class="btn small danger" data-delexp="${e.id}">✕</button></td></tr>`).join('')}
+        </table>` : '<div class="empty">Расходов пока нет.</div>'}
+      </div>`;
+    const sel = $('eMat');
+    const sync = () => { $('eFree').hidden = sel.value !== ''; };
+    sel.onchange = sync; sync();
+    // подставить цену из сметы
+    sel.addEventListener('change', () => {
+      const m = o.materials.find((x) => x.id === sel.value);
+      if (m && !$('ePrice').value) $('ePrice').value = m.price;
+    });
+  }
+
+  // ---- действия ----
+  document.addEventListener('click', (ev) => {
+    const t = ev.target.closest('button');
+    if (!t) return;
+    const o = current();
+    if (t.dataset.id) { state.currentId = t.dataset.id; tab = 'summary'; save(); render(); return; }
+    if (t.dataset.tab) { tab = t.dataset.tab; render(); return; }
+    if (t.dataset.delmat && confirm('Удалить материал из сметы? Записи расхода останутся.')) {
+      o.materials = o.materials.filter((m) => m.id !== t.dataset.delmat);
+      o.expenses.forEach((e) => { if (e.materialId === t.dataset.delmat) e.materialId = null; });
+      save(); render(); return;
+    }
+    if (t.dataset.delexp && confirm('Удалить запись расхода?')) {
+      o.expenses = o.expenses.filter((e) => e.id !== t.dataset.delexp);
+      save(); render(); return;
+    }
+    switch (t.id) {
+      case 'addObj': {
+        const name = (prompt('Название объекта:') || '').trim();
+        if (!name) return;
+        const b = Number((prompt('Общий бюджет, ' + CUR + ':', '0') || '0').replace(/\s/g, '').replace(',', '.'));
+        const obj = { id: uid(), name, budget: isFinite(b) && b >= 0 ? b : 0, materials: [], expenses: [] };
+        state.objects.push(obj); state.currentId = obj.id; tab = 'estimate'; save(); render(); break;
+      }
+      case 'editObj': {
+        const name = (prompt('Название объекта:', o.name) || '').trim();
+        if (!name) return;
+        const b = Number((prompt('Общий бюджет, ' + CUR + ':', o.budget) || '').replace(/\s/g, '').replace(',', '.'));
+        o.name = name; if (isFinite(b) && b >= 0) o.budget = b;
+        save(); render(); break;
+      }
+      case 'delObj':
+        if (confirm(`Удалить объект «${o.name}» со всей сметой и расходами?`)) {
+          state.objects = state.objects.filter((x) => x.id !== o.id);
+          state.currentId = state.objects[0] ? state.objects[0].id : null;
+          save(); render();
+        } break;
+      case 'addMat': {
+        const name = $('mName').value.trim(), unit = $('mUnit').value.trim();
+        const q = readNum($('mQty')), p = readNum($('mPrice'), { allowZero: true });
+        if (!name || !unit) { $('mErr').textContent = 'Укажите название и единицу измерения'; return; }
+        if (q.err || p.err) { $('mErr').textContent = 'Кол-во: ' + (q.err || 'ок') + '. Цена: ' + (p.err || 'ок'); return; }
+        o.materials.push({ id: uid(), name, unit, qty: q.v, price: p.v });
+        save(); render(); break;
+      }
+      case 'addExp': {
+        const matId = $('eMat').value || null;
+        const m = o.materials.find((x) => x.id === matId);
+        const name = m ? m.name : $('eName').value.trim();
+        const unit = m ? m.unit : $('eUnit').value.trim();
+        const q = readNum($('eQty')), p = readNum($('ePrice'), { allowZero: true });
+        if (!name || !unit) { $('eErr').textContent = 'Укажите название и единицу измерения'; return; }
+        if (!$('eDate').value) { $('eErr').textContent = 'Укажите дату'; return; }
+        if (q.err || p.err) { $('eErr').textContent = 'Кол-во: ' + (q.err || 'ок') + '. Цена: ' + (p.err || 'ок'); return; }
+        o.expenses.push({ id: uid(), date: $('eDate').value, materialId: matId, name, unit, qty: q.v, price: p.v });
+        save(); render(); break;
+      }
+      case 'exportCsv':
+        download(`${o.name}.csv`, Calc.toCSV(o), 'text/csv;charset=utf-8'); break;
+      case 'exportJson':
+        download('materials-backup.json', JSON.stringify(state, null, 2), 'application/json'); break;
+      case 'importJson': $('importFile').click(); break;
+    }
+  });
+
+  $('importFile').addEventListener('change', (ev) => {
+    const f = ev.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d || !Array.isArray(d.objects)) throw new Error();
+        if (!confirm('Заменить текущие данные данными из файла?')) return;
+        state = d; save(); render();
+      } catch (e) { alert('Не удалось прочитать файл копии'); }
+    };
+    r.readAsText(f);
+    ev.target.value = '';
+  });
+
+  load();
+  if (!current() && state.objects.length) state.currentId = state.objects[0].id;
+  render();
+})();
+</script>
+</body>
+</html>
