@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { summarize, validateNumber, toCSV } = require('./calc');
+const { summarize, validateNumber, toCSV } = require('../web/calc');
 
 const obj = {
   budget: 100000,

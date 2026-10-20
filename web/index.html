@@ -58,7 +58,7 @@
 <body>
 <div class="layout">
   <aside>
-    <h1>Объекты</h1>
+    <h1>Объекты <small style="color:var(--muted);font-weight:400">(общие)</small></h1>
     <div id="objList"></div>
     <button class="btn primary" id="addObj" style="width:100%;margin-top:8px">+ Новый объект</button>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
@@ -80,21 +80,37 @@
   const num = (n) => (n || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-  let storageOk = true;
-  let state = { objects: [], currentId: null };
+  let state = { rev: -1, objects: [] };
+  let currentId = null;
   let tab = 'summary';
+  let online = true;
+  let author = '';
+  try { author = localStorage.getItem('mt-author') || ''; } catch (e) {}
+  const current = () => state.objects.find((o) => o.id === currentId);
 
-  function load() {
+  // Запрос к серверу. Возвращает null и показывает ошибку, если не вышло.
+  async function api(method, url, body) {
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) state = JSON.parse(raw);
-    } catch (e) { storageOk = false; }
+      const r = await fetch('/api' + url, { method, body: body ? JSON.stringify(body) : undefined });
+      const data = await r.json();
+      if (!r.ok) { alert(data.error || 'Ошибка'); return null; }
+      online = true;
+      return data;
+    } catch (e) { online = false; render(); return null; }
   }
-  function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); }
-    catch (e) { storageOk = false; }
+  function applyState(data) {
+    if (!data) return;
+    state = data;
+    if (!current()) currentId = state.objects[0] ? state.objects[0].id : null;
+    render();
   }
-  const current = () => state.objects.find((o) => o.id === state.currentId);
+  async function act(method, url, body) { const d = await api(method, url, body); applyState(d); return d; }
+  // Раз в 10 секунд подтягиваем изменения коллег (не мешая вводу данных).
+  async function poll() {
+    const typing = document.activeElement && /INPUT|SELECT/.test(document.activeElement.tagName) && document.activeElement.value;
+    const d = await api('GET', '/state');
+    if (d && d.rev !== state.rev && !typing) applyState(d);
+  }
 
   function download(name, text, type) {
     const a = document.createElement('a');
@@ -114,14 +130,14 @@
   function renderSide() {
     $('objList').innerHTML = state.objects.map((o) => {
       const s = Calc.summarize(o);
-      return `<button class="obj ${o.id === state.currentId ? 'active' : ''}" data-id="${o.id}">${esc(o.name)}<small>${fmt(s.factTotal)} из ${fmt(o.budget)}</small></button>`;
+      return `<button class="obj ${o.id === currentId ? 'active' : ''}" data-id="${o.id}">${esc(o.name)}<small>${fmt(s.factTotal)} из ${fmt(o.budget)}</small></button>`;
     }).join('') || '<div class="empty" style="padding:12px 0">Пока нет объектов</div>';
   }
 
   function render() {
     renderSide();
     const o = current();
-    const warn = storageOk ? '' : '<div class="warn">Браузер не даёт сохранять данные. Всё пропадёт при закрытии вкладки — делайте резервную копию (JSON).</div>';
+    const warn = online ? '' : '<div class="warn">Нет связи с сервером. Изменения не сохраняются, повторю попытку автоматически.</div>';
     if (!o) { $('main').innerHTML = warn + '<div class="empty">Создайте первый объект слева, чтобы начать.</div>'; return; }
     const tabs = [['summary', 'Сводка'], ['estimate', 'Смета (план)'], ['expenses', 'Расход (факт)']];
     $('main').innerHTML = warn + `
@@ -201,6 +217,7 @@
               <option value="">— вне сметы —</option>
             </select></div>
           <div id="eFree" hidden><label>Название / ед.</label><div style="display:flex;gap:6px"><input id="eName" placeholder="Краска"><input id="eUnit" placeholder="л" style="width:70px"></div></div>
+          <div><label>Кто записывает</label><input id="eBy" placeholder="Имя" value="${esc(author)}"></div>
           <div><label>Количество</label><input id="eQty" inputmode="decimal"></div>
           <div><label>Цена за ед.</label><input id="ePrice" inputmode="decimal"></div>
           <div><button class="btn primary" id="addExp" style="width:100%">Записать</button></div>
@@ -209,8 +226,8 @@
       </div>
       <div class="card scroll">
         ${sorted.length ? `<table>
-          <tr><th>Дата</th><th>Материал</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th></th></tr>
-          ${sorted.map((e) => `<tr><td>${esc(e.date)}</td><td>${esc(e.name)} <small style="color:var(--muted)">${esc(e.unit)}</small></td><td>${num(e.qty)}</td><td>${fmt(e.price)}</td><td>${fmt(Calc.round2(e.qty * e.price))}</td>
+          <tr><th>Дата</th><th>Материал</th><th>Кто</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th></th></tr>
+          ${sorted.map((e) => `<tr><td>${esc(e.date)}</td><td>${esc(e.name)} <small style="color:var(--muted)">${esc(e.unit)}</small></td><td style="text-align:left">${esc(e.by || '')}</td><td>${num(e.qty)}</td><td>${fmt(e.price)}</td><td>${fmt(Calc.round2(e.qty * e.price))}</td>
             <td><button class="btn small danger" data-delexp="${e.id}">✕</button></td></tr>`).join('')}
         </table>` : '<div class="empty">Расходов пока нет.</div>'}
       </div>`;
@@ -229,45 +246,42 @@
     const t = ev.target.closest('button');
     if (!t) return;
     const o = current();
-    if (t.dataset.id) { state.currentId = t.dataset.id; tab = 'summary'; save(); render(); return; }
+    if (t.dataset.id) { currentId = t.dataset.id; tab = 'summary'; render(); return; }
     if (t.dataset.tab) { tab = t.dataset.tab; render(); return; }
     if (t.dataset.delmat && confirm('Удалить материал из сметы? Записи расхода останутся.')) {
-      o.materials = o.materials.filter((m) => m.id !== t.dataset.delmat);
-      o.expenses.forEach((e) => { if (e.materialId === t.dataset.delmat) e.materialId = null; });
-      save(); render(); return;
+      act('DELETE', `/objects/${o.id}/materials/${t.dataset.delmat}`); return;
     }
     if (t.dataset.delexp && confirm('Удалить запись расхода?')) {
-      o.expenses = o.expenses.filter((e) => e.id !== t.dataset.delexp);
-      save(); render(); return;
+      act('DELETE', `/objects/${o.id}/expenses/${t.dataset.delexp}`); return;
     }
+    const money = (v) => Number(String(v).replace(/\s/g, '').replace(',', '.'));
     switch (t.id) {
       case 'addObj': {
         const name = (prompt('Название объекта:') || '').trim();
         if (!name) return;
-        const b = Number((prompt('Общий бюджет, ' + CUR + ':', '0') || '0').replace(/\s/g, '').replace(',', '.'));
-        const obj = { id: uid(), name, budget: isFinite(b) && b >= 0 ? b : 0, materials: [], expenses: [] };
-        state.objects.push(obj); state.currentId = obj.id; tab = 'estimate'; save(); render(); break;
+        const b = money(prompt('Общий бюджет, ' + CUR + ':', '0') || '0');
+        act('POST', '/objects', { name, budget: isFinite(b) ? b : 0 }).then((d) => {
+          if (d) { currentId = d.objects[d.objects.length - 1].id; tab = 'estimate'; render(); }
+        });
+        break;
       }
       case 'editObj': {
         const name = (prompt('Название объекта:', o.name) || '').trim();
         if (!name) return;
-        const b = Number((prompt('Общий бюджет, ' + CUR + ':', o.budget) || '').replace(/\s/g, '').replace(',', '.'));
-        o.name = name; if (isFinite(b) && b >= 0) o.budget = b;
-        save(); render(); break;
+        const b = money(prompt('Общий бюджет, ' + CUR + ':', o.budget) || '');
+        act('PATCH', `/objects/${o.id}`, { name, ...(isFinite(b) ? { budget: b } : {}) });
+        break;
       }
       case 'delObj':
-        if (confirm(`Удалить объект «${o.name}» со всей сметой и расходами?`)) {
-          state.objects = state.objects.filter((x) => x.id !== o.id);
-          state.currentId = state.objects[0] ? state.objects[0].id : null;
-          save(); render();
-        } break;
+        if (confirm(`Удалить объект «${o.name}» со всей сметой и расходами? Это увидят все коллеги.`)) act('DELETE', `/objects/${o.id}`);
+        break;
       case 'addMat': {
         const name = $('mName').value.trim(), unit = $('mUnit').value.trim();
         const q = readNum($('mQty')), p = readNum($('mPrice'), { allowZero: true });
         if (!name || !unit) { $('mErr').textContent = 'Укажите название и единицу измерения'; return; }
         if (q.err || p.err) { $('mErr').textContent = 'Кол-во: ' + (q.err || 'ок') + '. Цена: ' + (p.err || 'ок'); return; }
-        o.materials.push({ id: uid(), name, unit, qty: q.v, price: p.v });
-        save(); render(); break;
+        act('POST', `/objects/${o.id}/materials`, { name, unit, qty: q.v, price: p.v });
+        break;
       }
       case 'addExp': {
         const matId = $('eMat').value || null;
@@ -278,8 +292,11 @@
         if (!name || !unit) { $('eErr').textContent = 'Укажите название и единицу измерения'; return; }
         if (!$('eDate').value) { $('eErr').textContent = 'Укажите дату'; return; }
         if (q.err || p.err) { $('eErr').textContent = 'Кол-во: ' + (q.err || 'ок') + '. Цена: ' + (p.err || 'ок'); return; }
-        o.expenses.push({ id: uid(), date: $('eDate').value, materialId: matId, name, unit, qty: q.v, price: p.v });
-        save(); render(); break;
+        const by = $('eBy').value.trim();
+        try { localStorage.setItem('mt-author', by); } catch (e) {}
+        author = by;
+        act('POST', `/objects/${o.id}/expenses`, { date: $('eDate').value, materialId: matId, name, unit, qty: q.v, price: p.v, by });
+        break;
       }
       case 'exportCsv':
         download(`${o.name}.csv`, Calc.toCSV(o), 'text/csv;charset=utf-8'); break;
@@ -297,17 +314,16 @@
       try {
         const d = JSON.parse(r.result);
         if (!d || !Array.isArray(d.objects)) throw new Error();
-        if (!confirm('Заменить текущие данные данными из файла?')) return;
-        state = d; save(); render();
+        if (!confirm('Заменить общие данные данными из файла? Это увидят все коллеги.')) return;
+        act('POST', '/import', d);
       } catch (e) { alert('Не удалось прочитать файл копии'); }
     };
     r.readAsText(f);
     ev.target.value = '';
   });
 
-  load();
-  if (!current() && state.objects.length) state.currentId = state.objects[0].id;
-  render();
+  api('GET', '/state').then((d) => { applyState(d); render(); });
+  setInterval(poll, 10000);
 })();
 </script>
 </body>
